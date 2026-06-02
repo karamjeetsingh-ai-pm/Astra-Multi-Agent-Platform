@@ -2,6 +2,7 @@ import streamlit as st
 import base64
 import sys
 import os
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -30,6 +31,23 @@ def get_svg_logo(size: int = 36) -> str:
         svg = f.read()
     b64 = base64.b64encode(svg.encode()).decode()
     return f'<img src="data:image/svg+xml;base64,{b64}" width="{size}" height="{size}" style="vertical-align:middle; margin-right:8px;">'
+
+def groq_with_retry(groq_client, messages, model="llama-3.3-70b-versatile", max_tokens=600, temperature=0.3):
+    for attempt in range(3):
+        try:
+            return groq_client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature
+            )
+        except Exception as e:
+            if "429" in str(e):
+                print(f"Rate limited. Retrying in 5s... (attempt {attempt+1})")
+                time.sleep(5)
+            else:
+                raise e
+    raise Exception("Max retries reached for Groq API")
 
 # ── Access Gate session state ─────────────────────────────────────
 if "prompt_count" not in st.session_state:
@@ -393,14 +411,10 @@ elif page == "💰 Revenue Intelligence":
                         import httpx
                         groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"), http_client=httpx.Client())
                         bottom_reps = reps_df.nsmallest(3, "Quota_Attainment_Pct")[["Rep_Name", "Quota_Attainment_Pct", "Win_Rate_Pct", "Avg_Sales_Cycle_Days"]].to_string()
-                        response = groq_client.chat.completions.create(
-                            model="llama-3.3-70b-versatile",
-                            messages=[
-                                {"role": "system", "content": "You are an elite sales coach. Give specific, actionable coaching advice based on rep performance data."},
-                                {"role": "user", "content": f"These reps are underperforming:\n{bottom_reps}\n\nGive 3 specific next best actions for each rep. Be direct and tactical."}
-                            ],
-                            max_tokens=600, temperature=0.3
-                        )
+                        response = groq_with_retry(groq_client, [
+                            {"role": "system", "content": "You are an elite sales coach. Give specific, actionable coaching advice based on rep performance data."},
+                            {"role": "user", "content": f"These reps are underperforming:\n{bottom_reps}\n\nGive 3 specific next best actions for each rep. Be direct and tactical."}
+                        ], max_tokens=600, temperature=0.3)
                         st.session_state.ae_nba = response.choices[0].message.content
                     except Exception as e:
                         st.session_state.ae_nba = f"Error: {e}"
@@ -456,14 +470,10 @@ elif page == "💰 Revenue Intelligence":
                     import httpx
                     groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"), http_client=httpx.Client())
                     pnl_summary = pnl_df[["Month", "Revenue_USD", "EBITDA_USD", "EBITDA_Margin_Pct", "NRR_Pct", "Headcount"]].to_string()
-                    response = groq_client.chat.completions.create(
-                        model="llama-3.3-70b-versatile",
-                        messages=[
-                            {"role": "system", "content": "You are a CFO advisor. Analyze financials and give board-ready insights with specific numbers."},
-                            {"role": "user", "content": f"Analyze this P&L data:\n{pnl_summary}\n\nProvide: 1) Key trends 2) Risk flags 3) Opportunities 4) Board recommendation. Use specific numbers."}
-                        ],
-                        max_tokens=800, temperature=0.2
-                    )
+                    response = groq_with_retry(groq_client, [
+                        {"role": "system", "content": "You are a CFO advisor. Analyze financials and give board-ready insights with specific numbers."},
+                        {"role": "user", "content": f"Analyze this P&L data:\n{pnl_summary}\n\nProvide: 1) Key trends 2) Risk flags 3) Opportunities 4) Board recommendation. Use specific numbers."}
+                    ], max_tokens=800, temperature=0.2)
                     st.session_state.cfo_insight = response.choices[0].message.content
                 except Exception as e:
                     st.session_state.cfo_insight = f"Error: {e}"
@@ -500,14 +510,10 @@ elif page == "💰 Revenue Intelligence":
                         import httpx
                         groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"), http_client=httpx.Client())
                         pnl_context = pnl_df[["Month", "Revenue_USD", "EBITDA_USD", "EBITDA_Margin_Pct", "Gross_Margin_Pct", "NRR_Pct", "Headcount", "Net_Income_USD"]].to_string()
-                        response = groq_client.chat.completions.create(
-                            model="llama-3.3-70b-versatile",
-                            messages=[
-                                {"role": "system", "content": "You are an expert CFO advisor for NexaCore Technologies. Answer financial questions using the P&L data provided. Always cite specific numbers. Be concise and board-ready."},
-                                {"role": "user", "content": f"P&L Data:\n{pnl_context}\n\nQuestion: {cfo_question}"}
-                            ],
-                            temperature=0.2, max_tokens=600
-                        )
+                        response = groq_with_retry(groq_client, [
+                            {"role": "system", "content": "You are an expert CFO advisor for NexaCore Technologies. Answer financial questions using the P&L data provided. Always cite specific numbers. Be concise and board-ready."},
+                            {"role": "user", "content": f"P&L Data:\n{pnl_context}\n\nQuestion: {cfo_question}"}
+                        ], max_tokens=600, temperature=0.2)
                         answer = response.choices[0].message.content
                         st.write(answer)
                         st.session_state.cfo_messages.append({"role": "assistant", "content": answer})
@@ -596,11 +602,10 @@ elif page == "🔬 Evals":
                         from groq import Groq
                         import httpx
                         groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"), http_client=httpx.Client())
-                        response = groq_client.chat.completions.create(
-                            model="llama-3.3-70b-versatile",
-                            messages=[{"role": "system", "content": "You are an HR assistant. Answer the question about NexaCore Technologies HR policies."}, {"role": "user", "content": final_q}],
-                            temperature=0.7, max_tokens=500
-                        )
+                        response = groq_with_retry(groq_client, [
+                            {"role": "system", "content": "You are an HR assistant. Answer the question about NexaCore Technologies HR policies."},
+                            {"role": "user", "content": final_q}
+                        ], max_tokens=500, temperature=0.7)
                         st.warning(response.choices[0].message.content)
                         st.caption("⚠️ No source documents – answer may be fabricated")
                     except Exception as e:
@@ -637,14 +642,10 @@ elif page == "🔬 Evals":
                     rag_answer = rag_result["answer"]
                     context = rag_result.get("context", "")
                     groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"), http_client=httpx.Client())
-                    eval_response = groq_client.chat.completions.create(
-                        model="llama-3.1-8b-instant",
-                        messages=[
-                            {"role": "system", "content": "You are an AI evaluator. Score RAG answers on 3 metrics (0.0-1.0). Return JSON only."},
-                            {"role": "user", "content": f"Question: {question}\nAnswer: {rag_answer[:500]}\nContext: {context[:500]}\n\nReturn ONLY this JSON:\n{{\"faithfulness\": 0.0,\"answer_relevancy\": 0.0,\"context_recall\": 0.0,\"reasoning\": \"one sentence\"}}"}
-                        ],
-                        temperature=0.1, max_tokens=200
-                    )
+                    eval_response = groq_with_retry(groq_client, [
+                        {"role": "system", "content": "You are an AI evaluator. Score RAG answers on 3 metrics (0.0-1.0). Return JSON only."},
+                        {"role": "user", "content": f"Question: {question}\nAnswer: {rag_answer[:500]}\nContext: {context[:500]}\n\nReturn ONLY this JSON:\n{{\"faithfulness\": 0.0,\"answer_relevancy\": 0.0,\"context_recall\": 0.0,\"reasoning\": \"one sentence\"}}"}
+                    ], model="llama-3.1-8b-instant", max_tokens=200, temperature=0.1)
                     import json
                     text = eval_response.choices[0].message.content.strip()
                     if "```json" in text:
@@ -656,7 +657,6 @@ elif page == "🔬 Evals":
                     results.append(scores)
                 except Exception:
                     results.append({"question": question[:50] + "...", "faithfulness": 0.85, "answer_relevancy": 0.88, "context_recall": 0.82, "reasoning": "Evaluation completed"})
-                import time
                 time.sleep(1)
             progress.progress(1.0)
             status.success("✅ Evaluation complete!")
